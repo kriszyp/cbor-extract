@@ -5,7 +5,7 @@
   },
   "targets": [
     {
-      "target_name": "msgpackr-extract",
+      "target_name": "cbor-extract",
       "win_delay_load_hook": "false",
       "sources": [
         "src/extract.cpp",

@@ -1,12 +1,12 @@
 {
-  "name": "msgpackr-extract",
+  "name": "cbor-extract",
   "author": "Kris Zyp",
-  "version": "1.0.0",
-  "description": "Node addon for string extraction for msgpackr",
+  "version": "0.1.0",
+  "description": "Node addon for string extraction for cbor-x",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "http://github.com/kriszyp/msgpackr-extract"
+    "url": "http://github.com/kriszyp/cbor-extract"
   },
   "scripts": {
     "install": "node-gyp-build",
@@ -16,7 +16,7 @@
   "main": "./index.js",
   "gypfile": true,
   "dependencies": {
-    "nan": "^2.14.1",
+    "nan": "^2.14.2",
     "node-gyp-build": "^4.2.3"
   }
 }

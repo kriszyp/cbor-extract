@@ -1,8 +1,8 @@
 /*
-This is responsible for extracting the strings, in bulk, from a MessagePack buffer. Creating strings from buffers can
+This is responsible for extracting the strings, in bulk, from a CBOR buffer. Creating strings from buffers can
 be one of the biggest performance bottlenecks of parsing, but creating an array of extracting strings all at once
 provides much better performance. This will parse and produce up to 256 strings at once .The JS parser can call this multiple
-times as necessary to get more strings. This must be partially capable of parsing MessagePack so it can know where to
+times as necessary to get more strings. This must be partially capable of parsing CBOR so it can know where to
 find the string tokens and determine their position and length. All strings are decoded as UTF-8.
 */
 #include <v8.h>
@@ -12,8 +12,7 @@ find the string tokens and determine their position and length. All strings are 
 using namespace v8;
 
 const int MAX_TARGET_SIZE = 255;
-typedef int (*token_handler)(uint8_t* source, int position, int size);
-token_handler tokenTable[256] = {};
+
 class Extractor {
 public:
 	v8::Local<v8::Value> target[MAX_TARGET_SIZE + 1]; // leave one for the queued string
@@ -59,14 +58,15 @@ public:
 		lastStringEnd = end;
 	}
 
-	Local<Value> extractStrings(int startingPosition, int size, uint8_t* inputSource) {
+	Local<Value> extractStrings(int startingPosition, int size, int firstStringSize, uint8_t* inputSource) {
 		writePosition = 0;
 		lastStringEnd = 0;
 		position = startingPosition;
 		source = inputSource;
+		readString(firstStringSize, firstStringSize < 0x100);
 		while (position < size) {
 			uint8_t token = source[position++];
-			uint8 majorType = token >> 5;
+			uint8_t majorType = token >> 5;
 			token = token & 0x1f;
 			if (majorType == 2 || majorType == 3) {
 				int length;
@@ -74,24 +74,24 @@ public:
 					case 0x18:
 						if (position + 1 > size) {
 							Nan::ThrowError("Unexpected end of buffer");
-							return size;
+							return Nan::Null();
 						}
 						length = source[position++];
 						break;
 					case 0x19:
 						if (position + 2 > size) {
 							Nan::ThrowError("Unexpected end of buffer");
-							return size;
+							return Nan::Null();
 						}
-						int length = source[position++] << 8;
+						length = source[position++] << 8;
 						length += source[position++];
 						break;
 					case 0x1a:
 						if (position + 4 > size) {
 							Nan::ThrowError("Unexpected end of buffer");
-							return size;
+							return Nan::Null();
 						}
-						int length = source[position++] << 24;
+						length = source[position++] << 24;
 						length += source[position++] << 16;
 						length += source[position++] << 8;
 						length += source[position++];
@@ -99,9 +99,9 @@ public:
 						break;
 					case 0x1b:
 						Nan::ThrowError("Too large of string/buffer");
-						return size;
+						return Nan::Null();
 						break;
-					default
+					default:
 						length = token;
 				}
 				if (majorType == 3) {
@@ -111,6 +111,8 @@ public:
 						return Nan::Null();
 					}
 					readString(length, length < 0x100);
+					if (writePosition >= MAX_TARGET_SIZE)
+						break;
 				} else { // binary data
 					position += length;
 				}
@@ -131,24 +133,36 @@ public:
 						break;
 				}
 			}
-			if (writePosition >= MAX_TARGET_SIZE)
-				break;
 		}
+		if (lastStringEnd)
+			target[writePosition++] = String::NewFromOneByte(isolate, (uint8_t*) source + stringStart, v8::NewStringType::kNormal, lastStringEnd - stringStart).ToLocalChecked();
+#if NODE_VERSION_AT_LEAST(12,0,0)
+		return Array::New(isolate, target, writePosition);
+#else
+		Local<Array> array = Array::New(isolate, writePosition);
+		Local<Context> context = Nan::GetCurrentContext();
+		for (int i = 0; i < writePosition; i++) {
+			array->Set(context, i, target[i]);
+		}
+		return array;
+#endif
 	}
-}
+};
 
 #ifdef thread_local
 static thread_local Extractor* extractor;
 #else
 static Extractor* extractor;
 #endif
+
 NAN_METHOD(extractStrings) {
 	Local<Context> context = Nan::GetCurrentContext();
 	int position = Local<Number>::Cast(info[0])->IntegerValue(context).FromJust();
 	int size = Local<Number>::Cast(info[1])->IntegerValue(context).FromJust();
-	if (info[2]->IsArrayBufferView()) {
-		uint8_t* source = (uint8_t*) node::Buffer::Data(info[2]);
-		info.GetReturnValue().Set(extractor->extractStrings(position, size, source));
+	int firstStringSize = Local<Number>::Cast(info[2])->IntegerValue(context).FromJust();
+	if (info[3]->IsArrayBufferView()) {
+		uint8_t* source = (uint8_t*) node::Buffer::Data(info[3]);
+		info.GetReturnValue().Set(extractor->extractStrings(position, size, firstStringSize, source));
 	}
 }
 
@@ -159,7 +173,6 @@ NAN_METHOD(isOneByte) {
 
 void initializeModule(v8::Local<v8::Object> exports) {
 	extractor = new Extractor(); // create our thread-local extractor
-	setupTokenTable();
 	Nan::SetMethod(exports, "extractStrings", extractStrings);
 	Nan::SetMethod(exports, "isOneByte", isOneByte);
 }

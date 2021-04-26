@@ -6,6 +6,7 @@ times as necessary to get more strings. This must be partially capable of parsin
 find the string tokens and determine their position and length. All strings are decoded as UTF-8.
 */
 #include <v8.h>
+#include <v8-fast-api-calls.h>
 #include <node.h>
 #include <node_buffer.h>
 #include <nan.h>
@@ -170,11 +171,158 @@ NAN_METHOD(isOneByte) {
 	Local<Context> context = Nan::GetCurrentContext();
 	info.GetReturnValue().Set(Nan::New<Boolean>(Local<String>::Cast(info[0])->IsOneByte()));
 }
+class CustomExternalOneByteStringResource : public String::ExternalOneByteStringResource {
+private:
+    const char *d;
+    size_t l;
+
+public:
+    CustomExternalOneByteStringResource(char *data, size_t size) {
+    // The Latin data
+    this->d = data;
+    // Number of Latin characters in the string
+    this->l = size;
+}
+    ~CustomExternalOneByteStringResource() {};
+
+	void Dispose() {
+	    delete this;
+	}
+    const char *data() const{
+	    return this->d;
+	}
+
+    size_t length() const {
+	    return this->l;
+	}
+
+};
+
+static CustomExternalOneByteStringResource* theResource;
+
+NAN_METHOD(bufferToExternalString) {
+	Local<Context> context = Nan::GetCurrentContext();
+	CustomExternalOneByteStringResource* resource =
+		new CustomExternalOneByteStringResource(node::Buffer::Data(info[0]), node::Buffer::Length(info[0]));
+	//memcpy((void*) theResource->data(), source, length);
+	auto str = Nan::New<v8::String>(resource).ToLocalChecked();
+	info.GetReturnValue().Set(str);
+}
+
+static Persistent<String> theString;
+
+NAN_METHOD(makeString) {
+	Local<Context> context = Nan::GetCurrentContext();
+	char* data = new char[1000];
+	
+	if (theString.IsEmpty()) {
+		theResource = new CustomExternalOneByteStringResource(data, 1000);
+		auto str = Nan::New<v8::String>(theResource).ToLocalChecked();
+		theString.Reset(Isolate::GetCurrent(), str);
+		info.GetReturnValue().Set(str);
+	} else {
+		theResource = new CustomExternalOneByteStringResource(data, 1000);
+		info.GetReturnValue().Set(Nan::New<Boolean>(theString.Get(Isolate::GetCurrent())->MakeExternal(theResource)));
+	}
+}
+
+
+char* sample = "Hello, world";
+    // TODO(mslekova): Clean-up these constants
+    // The constants kV8EmbedderWrapperTypeIndex and
+    // kV8EmbedderWrapperObjectIndex describe the offsets for the type info
+    // struct and the native object, when expressed as internal field indices
+    // within a JSObject. The existance of this helper function assumes that
+    // all embedder objects have their JSObject-side type info at the same
+    // offset, but this is not a limitation of the API itself. For a detailed
+    // use case, see the third example.
+    static constexpr int kV8EmbedderWrapperTypeIndex = 0;
+    static constexpr int kV8EmbedderWrapperObjectIndex = 1;
+
+// Helper method with a check for field count.
+    template <typename T, int offset>
+    inline T* GetInternalField(v8::Local<v8::Object> wrapper) {
+      return reinterpret_cast<T*>(
+          wrapper->GetAlignedPointerFromInternalField(kV8EmbedderWrapperObjectIndex));
+    }
+
+    class CustomEmbedderType {
+     public:
+      // Returns the raw C object from a wrapper JS object.
+      static CustomEmbedderType* Unwrap(v8::Local<v8::Object> wrapper) {
+        return GetInternalField<CustomEmbedderType,
+                                kV8EmbedderWrapperObjectIndex>(wrapper);
+      }
+      static void FastMethod(v8::ApiObject receiver_obj, int param) {
+        /*v8::Object* v8_object = reinterpret_cast<v8::Object*>(&receiver_obj);
+        CustomEmbedderType* receiver = static_cast<CustomEmbedderType*>(
+          v8_object->GetAlignedPointerFromInternalField(kV8EmbedderWrapperObjectIndex));*/
+        // Type checks are already done by the optimized code.
+        // Then call some performance-critical method like:
+        // receiver->Method(param);
+      	for (int i = 0; i < 10; i++) {
+      		if (sample[i] > 125)
+      			fprintf(stderr,"f");
+      	}
+	}
+
+      static void SlowMethod(
+          const v8::FunctionCallbackInfo<v8::Value>& info) {
+        /*v8::Local<v8::Object> instance =
+          v8::Local<v8::Object>::Cast(info.Holder());
+        CustomEmbedderType* receiver = Unwrap(instance);*/
+        // TODO: Do type checks and extract {param}.
+        //receiver->Method(param);
+      	for (int i = 0; i < 10; i++) {
+      		if (sample[i] > 125)
+      			fprintf(stderr, "s");
+      	}
+      }
+    };
+
+
+    // The following setup function can be templatized based on
+    // the {embedder_object} argument.
+    Local<v8::Object> SetupCustomEmbedderObject() {
+
+	Isolate *isolate = Isolate::GetCurrent();
+	CustomEmbedderType* embedder_object = new CustomEmbedderType();
+
+      v8::CFunction c_func =
+        CFunction::Make(CustomEmbedderType::FastMethod);
+
+      Local<v8::FunctionTemplate> method_template =
+        v8::FunctionTemplate::New(
+          isolate, CustomEmbedderType::SlowMethod, v8::Local<v8::Value>(),
+          v8::Local<v8::Signature>(), 0, v8::ConstructorBehavior::kThrow,
+          v8::SideEffectType::kHasNoSideEffect, &c_func);
+
+      v8::Local<v8::ObjectTemplate> object_template =
+        v8::ObjectTemplate::New(isolate);
+      object_template->SetInternalFieldCount(
+        kV8EmbedderWrapperObjectIndex + 1);
+      object_template->Set(isolate, "method", method_template);
+
+      // Instantiate the wrapper JS object.
+      v8::Local<v8::Object> object =
+          object_template->NewInstance(Nan::GetCurrentContext()).ToLocalChecked();
+      object->SetAlignedPointerInInternalField(
+        kV8EmbedderWrapperObjectIndex,
+        reinterpret_cast<void*>(embedder_object));
+      return object;
+      // TODO: Expose {object} where it's necessary.
+    }
+
+
+
 
 void initializeModule(v8::Local<v8::Object> exports) {
 	extractor = new Extractor(); // create our thread-local extractor
 	Nan::SetMethod(exports, "extractStrings", extractStrings);
 	Nan::SetMethod(exports, "isOneByte", isOneByte);
+	Nan::SetMethod(exports, "bufferToExternalString", bufferToExternalString);
+	Nan::SetMethod(exports, "makeString", makeString);
+	exports->Set(Nan::GetCurrentContext(), Nan::New<String>("testFast").ToLocalChecked(), SetupCustomEmbedderObject());
 }
 
 NODE_MODULE_CONTEXT_AWARE(extractor, initializeModule);

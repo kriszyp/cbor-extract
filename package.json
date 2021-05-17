@@ -1,7 +1,7 @@
 {
   "name": "cbor-extract",
   "author": "Kris Zyp",
-  "version": "0.2.2",
+  "version": "0.3.0",
   "description": "Node addon for string extraction for cbor-x",
   "license": "MIT",
   "repository": {

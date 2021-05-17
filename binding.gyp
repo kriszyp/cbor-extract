@@ -58,8 +58,6 @@
             "CLANG_CXX_LIBRARY": "libc++"
           }
         }],
-        ["OS=='win'", {
-        }],
       ],
     }
   ]

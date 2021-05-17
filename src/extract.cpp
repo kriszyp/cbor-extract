@@ -11,6 +11,18 @@ find the string tokens and determine their position and length. All strings are 
 #include <nan.h>
 using namespace v8;
 
+#ifndef thread_local
+#ifdef __GNUC__
+# define thread_local __thread
+#elif __STDC_VERSION__ >= 201112L
+# define thread_local _Thread_local
+#elif defined(_MSC_VER)
+# define thread_local __declspec(thread)
+#else
+# define thread_local
+#endif
+#endif
+
 const int MAX_TARGET_SIZE = 255;
 
 class Extractor {
@@ -48,7 +60,7 @@ public:
 		}
 
 		if (lastStringEnd) {
-			if (start - lastStringEnd > 40 || end - stringStart > 4000) {
+			if (start - lastStringEnd > 40 || end - stringStart > 6000) {
 				target[writePosition++] = String::NewFromOneByte(isolate, (uint8_t*) source + stringStart, v8::NewStringType::kNormal, lastStringEnd - stringStart).ToLocalChecked();
 				stringStart = start;
 			}
@@ -73,14 +85,14 @@ public:
 				switch (token) {
 					case 0x18:
 						if (position + 1 > size) {
-							Nan::ThrowError("Unexpected end of buffer");
+							Nan::ThrowError("Unexpected end of buffer reading string");
 							return Nan::Null();
 						}
 						length = source[position++];
 						break;
 					case 0x19:
 						if (position + 2 > size) {
-							Nan::ThrowError("Unexpected end of buffer");
+							Nan::ThrowError("Unexpected end of buffer reading string");
 							return Nan::Null();
 						}
 						length = source[position++] << 8;
@@ -88,17 +100,16 @@ public:
 						break;
 					case 0x1a:
 						if (position + 4 > size) {
-							Nan::ThrowError("Unexpected end of buffer");
+							Nan::ThrowError("Unexpected end of buffer reading string");
 							return Nan::Null();
 						}
 						length = source[position++] << 24;
 						length += source[position++] << 16;
 						length += source[position++] << 8;
 						length += source[position++];
-						position += 4;
 						break;
 					case 0x1b:
-						Nan::ThrowError("Too large of string/buffer");
+						Nan::ThrowError("Unexpected end of buffer reading string");
 						return Nan::Null();
 						break;
 					default:
@@ -134,8 +145,14 @@ public:
 				}
 			}
 		}
-		if (lastStringEnd)
+
+		if (lastStringEnd) {
+			if (writePosition == 0)
+				return String::NewFromOneByte(isolate, (uint8_t*) source + stringStart, v8::NewStringType::kNormal, lastStringEnd - stringStart).ToLocalChecked();
 			target[writePosition++] = String::NewFromOneByte(isolate, (uint8_t*) source + stringStart, v8::NewStringType::kNormal, lastStringEnd - stringStart).ToLocalChecked();
+		} else if (writePosition == 1) {
+			return target[0];
+		}
 #if NODE_VERSION_AT_LEAST(12,0,0)
 		return Array::New(isolate, target, writePosition);
 #else
@@ -149,11 +166,7 @@ public:
 	}
 };
 
-#ifdef thread_local
 static thread_local Extractor* extractor;
-#else
-static Extractor* extractor;
-#endif
 
 NAN_METHOD(extractStrings) {
 	Local<Context> context = Nan::GetCurrentContext();

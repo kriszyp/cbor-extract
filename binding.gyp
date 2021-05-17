@@ -24,6 +24,21 @@
                 "-Wimplicit-fallthrough=2",
               ],
             }],
+            ["node_module_version >= 93", {
+              "cflags_cc": [
+                "-fPIC",
+                "-fvisibility=hidden",
+                "-fvisibility-inlines-hidden",
+                "-std=c++14"
+              ]
+            }, {
+             "cflags_cc": [
+              "-fPIC",
+              "-fvisibility=hidden",
+              "-fvisibility-inlines-hidden",
+              "-std=c++11"
+              ],
+            }],
           ],
           "ldflags": [
             "-fPIC",
@@ -34,12 +49,6 @@
             "-fvisibility=hidden",
             "-O3"
           ],
-          "cflags_cc": [
-            "-fPIC",
-            "-fvisibility=hidden",
-            "-fvisibility-inlines-hidden",
-            "-std=c++0x"
-          ]
         }],
         ["OS=='mac'", {
           "xcode_settings": {

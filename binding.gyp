@@ -18,25 +18,15 @@
           "variables": {
             "gcc_version" : "<!(<(os_linux_compiler) -dumpversion | cut -d '.' -f 1)",
           },
+          "cflags_cc": [
+            "-fPIC",
+            "-fvisibility=hidden",
+            "-fvisibility-inlines-hidden",
+          ],
           "conditions": [
             ["gcc_version>=7", {
               "cflags": [
                 "-Wimplicit-fallthrough=2",
-              ],
-            }],
-            ["node_module_version >= 93", {
-              "cflags_cc": [
-                "-fPIC",
-                "-fvisibility=hidden",
-                "-fvisibility-inlines-hidden",
-                "-std=c++14"
-              ]
-            }, {
-             "cflags_cc": [
-              "-fPIC",
-              "-fvisibility=hidden",
-              "-fvisibility-inlines-hidden",
-              "-std=c++11"
               ],
             }],
           ],
@@ -49,14 +39,6 @@
             "-fvisibility=hidden",
             "-O3"
           ],
-        }],
-        ["OS=='mac'", {
-          "xcode_settings": {
-            "OTHER_CPLUSPLUSFLAGS" : ["-std=c++14"],
-            "MACOSX_DEPLOYMENT_TARGET": "10.7",
-            "OTHER_LDFLAGS": ["-std=c++14"],
-            "CLANG_CXX_LIBRARY": "libc++"
-          }
         }],
       ],
     }

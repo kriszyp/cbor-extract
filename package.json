@@ -25,6 +25,6 @@
   },
   "devDependencies": {
     "prebuildify": "kriszyp/prebuildify#b78c5a9",
-    "prebuildify-ci": "^1.0.5",
+    "prebuildify-ci": "^1.0.5"
   }
 }

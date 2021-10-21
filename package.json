@@ -1,7 +1,7 @@
 {
   "name": "cbor-extract",
   "author": "Kris Zyp",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "description": "Node addon for string extraction for cbor-x",
   "license": "MIT",
   "repository": {
@@ -11,7 +11,11 @@
   "scripts": {
     "install": "node-gyp-build",
     "recompile": "node-gyp build",
-    "test": "./node_modules/.bin/mocha tests/test*.js -u tdd"
+    "prebuild-arm64": "prebuildify --arch=arm64 --target 17.0.1 && prebuildify --arch=arm64 --target 16.9.0 && prebuildify --arch=arm64 --target 14.17.6",
+    "prebuild": "prebuildify --target 17.0.1 && prebuildify --target 16.9.0 && prebuildify --target 14.17.6 && prebuildify --target 12.18.0",
+    "before-publish": "prebuildify-ci download && prebuildify --target 17.0.1 && prebuildify --target 16.9.0 && prebuildify --target 14.17.6 && prebuildify --target 12.18.0 && prebuildify --target electron@13.1.4",
+    "test-prebuild": "prebuildify --target 16.9.0",
+    "test": ""
   },
   "main": "./index.js",
   "gypfile": true,

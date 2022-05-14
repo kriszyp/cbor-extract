@@ -1,7 +1,7 @@
 {
   "name": "cbor-extract",
   "author": "Kris Zyp",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "description": "Node addon for string extraction for cbor-x",
   "license": "MIT",
   "repository": {
@@ -9,22 +9,26 @@
     "url": "http://github.com/kriszyp/cbor-extract"
   },
   "scripts": {
-    "install": "node-gyp-build",
+    "install": "node-gyp-build-optional-packages",
     "recompile": "node-gyp clean && node-gyp configure && node-gyp build",
-    "before-publish": "prebuildify-ci download && prebuildify --target 17.2.0 && prebuildify --target 16.13.0 && prebuildify --target 15.5.0 && prebuildify --target 14.17.6 && prebuildify --target 12.22.7 && prebuildify --target electron@15.2.0",
-    "prebuild": "prebuildify --target 17.2.0 && prebuildify --target 16.13.0 && prebuildify --target 15.5.0 && prebuildify --target 14.17.6 && prebuildify --target 12.22.7 && prebuildify --target electron@15.2.0",
-    "prebuild-musl": "prebuildify --target 17.2.0 --libc musl --tag-libc && prebuildify --target 16.13.0 --libc musl --tag-libc && prebuildify --target 14.17.6 --libc musl --tag-libc && prebuildify --target 12.22.7 --libc musl --tag-libc",
-    "prebuild-arm64": "prebuildify --arch=arm64 --target 17.2.0 --libc musl && prebuildify --arch=arm64 --target 16.13.0 && prebuildify --arch=arm64 --target 14.17.6 && prebuildify --arch=arm64 --target electron@15.2.0",
-    "test": ""
+    "before-publish": "prebuildify-ci download && prebuildify --target 16.14.2 && set ENABLE_V8_FUNCTIONS=false&& prebuildify --optional-packages --napi --target 16.14.2 && node set-optional-deps.cjs",
+    "prebuild": "prebuildify --target 16.14.2",
+    "prebuild-libc": "prebuildify --tag-libc --target 16.14.2 && ENABLE_V8_FUNCTIONS=false prebuildify --optional-packages --napi --tag-libc --target 16.14.2",
+    "publish-all": "cd prebuilds/win32-x64 && npm publish --otp %OTP% && cd ../darwin-x64 && npm publish --otp %OTP% && cd ../darwin-arm64 && npm publish --otp %OTP% && cd ../linux-x64 && npm publish --otp %OTP% && cd ../linux-arm64 && npm publish --otp %OTP%  && cd ../linux-arm && npm publish --otp %OTP% && cd ../.. && npm publish --otp %OTP%",
+    "test": "node ./index.js"
   },
   "main": "./index.js",
   "gypfile": true,
   "dependencies": {
-    "nan": "^2.14.2",
-    "node-gyp-build": "^4.2.3"
+    "node-gyp-build-optional-packages": "5.0.0"
   },
+  "files": [
+    "index.js",
+    "/src",
+    "/*.gyp"
+  ],
   "devDependencies": {
-    "prebuildify": "^5.0.0",
+    "prebuildify": "kriszyp/prebuildify#optional-packages",
     "prebuildify-ci": "^1.0.5"
   }
 }

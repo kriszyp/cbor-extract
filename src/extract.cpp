@@ -5,11 +5,10 @@ provides much better performance. This will parse and produce up to 256 strings 
 times as necessary to get more strings. This must be partially capable of parsing CBOR so it can know where to
 find the string tokens and determine their position and length. All strings are decoded as UTF-8.
 */
+#include <node_api.h>
+#if ENABLE_V8_API
 #include <v8.h>
-#include <node.h>
-#include <node_buffer.h>
-#include <nan.h>
-using namespace v8;
+#endif
 
 #ifndef thread_local
 #ifdef __GNUC__
@@ -24,18 +23,23 @@ using namespace v8;
 #endif
 
 const int MAX_TARGET_SIZE = 255;
-
+napi_value unexpectedEnd(napi_env env) {
+	napi_value returnValue;
+	napi_get_undefined(env, &returnValue);
+	napi_throw_type_error(env, NULL, "Unexpected end of buffer reading string");
+	return returnValue;
+}
 class Extractor {
 public:
-	v8::Local<v8::Value> target[MAX_TARGET_SIZE + 1]; // leave one for the queued string
+	napi_value target[MAX_TARGET_SIZE + 1]; // leave one for the queued string
 
 	uint8_t* source;
 	int position = 0;
 	int writePosition = 0;
 	int stringStart = 0;
 	int lastStringEnd = 0;
-	Isolate *isolate = Isolate::GetCurrent();
-	void readString(int length, bool allowStringBlocks) {
+
+	void readString(napi_env env, int length, bool allowStringBlocks) {
 		int start = position;
 		int end = position + length;
 		if (allowStringBlocks) { // for larger strings, we don't bother to check every character for being latin, and just go right to creating a new string
@@ -50,18 +54,24 @@ public:
 		if (position < end) {
 			// non-latin character
 			if (lastStringEnd) {
-				target[writePosition++] = String::NewFromOneByte(isolate,  (uint8_t*) source + stringStart, v8::NewStringType::kNormal, lastStringEnd - stringStart).ToLocalChecked();
+				napi_value value;
+				napi_create_string_latin1(env, (const char*) source + stringStart, lastStringEnd - stringStart, &value);
+				target[writePosition++] = value;
 				lastStringEnd = 0;
 			}
 			// use standard utf-8 conversion
-			target[writePosition++] = Nan::New<v8::String>((char*) source + start, (int) length).ToLocalChecked();
+			napi_value value;
+			napi_create_string_utf8(env, (const char*) source + start, (int) length, &value);
+			target[writePosition++] = value;
 			position = end;
 			return;
 		}
 
 		if (lastStringEnd) {
 			if (start - lastStringEnd > 40 || end - stringStart > 6000) {
-				target[writePosition++] = String::NewFromOneByte(isolate, (uint8_t*) source + stringStart, v8::NewStringType::kNormal, lastStringEnd - stringStart).ToLocalChecked();
+				napi_value value;
+				napi_create_string_latin1(env, (const char*) source + stringStart, lastStringEnd - stringStart, &value);
+				target[writePosition++] = value;
 				stringStart = start;
 			}
 		} else {
@@ -69,13 +79,12 @@ public:
 		}
 		lastStringEnd = end;
 	}
-
-	Local<Value> extractStrings(int startingPosition, int size, int firstStringSize, uint8_t* inputSource) {
+	napi_value extractStrings(napi_env env, int startingPosition, int size, int firstStringSize, uint8_t* inputSource) {
 		writePosition = 0;
 		lastStringEnd = 0;
 		position = startingPosition;
 		source = inputSource;
-		readString(firstStringSize, firstStringSize < 0x100);
+		readString(env, firstStringSize, firstStringSize < 0x100);
 		while (position < size) {
 			uint8_t token = source[position++];
 			uint8_t majorType = token >> 5;
@@ -85,23 +94,20 @@ public:
 				switch (token) {
 					case 0x18:
 						if (position + 1 > size) {
-							Nan::ThrowError("Unexpected end of buffer reading string");
-							return Nan::Null();
+							return unexpectedEnd(env);
 						}
 						length = source[position++];
 						break;
 					case 0x19:
 						if (position + 2 > size) {
-							Nan::ThrowError("Unexpected end of buffer reading string");
-							return Nan::Null();
+							return unexpectedEnd(env);
 						}
 						length = source[position++] << 8;
 						length += source[position++];
 						break;
 					case 0x1a:
 						if (position + 4 > size) {
-							Nan::ThrowError("Unexpected end of buffer reading string");
-							return Nan::Null();
+							return unexpectedEnd(env);
 						}
 						length = source[position++] << 24;
 						length += source[position++] << 16;
@@ -109,19 +115,16 @@ public:
 						length += source[position++];
 						break;
 					case 0x1b:
-						Nan::ThrowError("Unexpected end of buffer reading string");
-						return Nan::Null();
-						break;
+						return unexpectedEnd(env);
 					default:
 						length = token;
 				}
 				if (majorType == 3) {
 					// string
 					if (length + position > size) {
-						Nan::ThrowError("Unexpected end of buffer reading string");
-						return Nan::Null();
+						return unexpectedEnd(env);
 					}
-					readString(length, length < 0x100);
+					readString(env, length, length < 0x100);
 					if (writePosition >= MAX_TARGET_SIZE)
 						break;
 				} else { // binary data
@@ -145,48 +148,50 @@ public:
 				}
 			}
 		}
-
 		if (lastStringEnd) {
-			if (writePosition == 0)
-				return String::NewFromOneByte(isolate, (uint8_t*) source + stringStart, v8::NewStringType::kNormal, lastStringEnd - stringStart).ToLocalChecked();
-			target[writePosition++] = String::NewFromOneByte(isolate, (uint8_t*) source + stringStart, v8::NewStringType::kNormal, lastStringEnd - stringStart).ToLocalChecked();
+			napi_value value;
+			napi_create_string_latin1(env, (const char*) source + stringStart, lastStringEnd - stringStart, &value);
+			if (writePosition == 0) {
+				return value;
+			}
+			target[writePosition++] = value;
 		} else if (writePosition == 1) {
 			return target[0];
 		}
-#if NODE_VERSION_AT_LEAST(12,0,0)
-		return Array::New(isolate, target, writePosition);
-#else
-		Local<Array> array = Array::New(isolate, writePosition);
-		Local<Context> context = Nan::GetCurrentContext();
+		napi_value array;
+		#if ENABLE_V8_API
+		v8::Local<v8::Array> v8Array = v8::Array::New(v8::Isolate::GetCurrent(), (v8::Local<v8::Value>*) target, writePosition);
+		memcpy(&array, &v8Array, sizeof(array));
+		#else
+		napi_create_array_with_length(env, writePosition, &array);
 		for (int i = 0; i < writePosition; i++) {
-			array->Set(context, i, target[i]);
+			napi_set_element(env, array, i, target[i]);
 		}
+		#endif
 		return array;
-#endif
 	}
 };
 
 static thread_local Extractor* extractor;
 
-NAN_METHOD(extractStrings) {
-	Local<Context> context = Nan::GetCurrentContext();
-	int position = Local<Number>::Cast(info[0])->IntegerValue(context).FromJust();
-	int size = Local<Number>::Cast(info[1])->IntegerValue(context).FromJust();
-	int firstStringSize = Local<Number>::Cast(info[2])->IntegerValue(context).FromJust();
-	if (info[3]->IsArrayBufferView()) {
-		uint8_t* source = (uint8_t*) node::Buffer::Data(info[3]);
-		info.GetReturnValue().Set(extractor->extractStrings(position, size, firstStringSize, source));
-	}
+napi_value extractStrings(napi_env env, napi_callback_info info) {
+	size_t argc = 4;
+	napi_value args[4];
+	napi_get_cb_info(env, info, &argc, args, NULL, NULL);
+	uint32_t position;
+	uint32_t size;
+	uint32_t firstStringSize;
+	napi_get_value_uint32(env, args[0], &position);
+	napi_get_value_uint32(env, args[1], &size);
+	napi_get_value_uint32(env, args[2], &firstStringSize);
+	uint8_t* source;
+	napi_get_typedarray_info(env, args[3], NULL, NULL, (void**) &source, NULL, NULL);
+	return extractor->extractStrings(env, position, size, firstStringSize, source);
 }
+#define EXPORT_NAPI_FUNCTION(name, func) { napi_property_descriptor desc = { name, 0, func, 0, 0, 0, (napi_property_attributes) (napi_writable | napi_configurable), 0 }; napi_define_properties(env, exports, 1, &desc); }
 
-NAN_METHOD(isOneByte) {
-	info.GetReturnValue().Set(Nan::New<Boolean>(Local<String>::Cast(info[0])->IsOneByte()));
-}
-
-void initializeModule(v8::Local<v8::Object> exports) {
+NAPI_MODULE_INIT() {
 	extractor = new Extractor(); // create our thread-local extractor
-	Nan::SetMethod(exports, "extractStrings", extractStrings);
-	Nan::SetMethod(exports, "isOneByte", isOneByte);
+	EXPORT_NAPI_FUNCTION("extractStrings", extractStrings);
+	return exports;
 }
-
-NODE_MODULE_CONTEXT_AWARE(extractor, initializeModule);

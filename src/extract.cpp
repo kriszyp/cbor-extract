@@ -185,7 +185,8 @@ napi_value extractStrings(napi_env env, napi_callback_info info) {
 	napi_get_value_uint32(env, args[1], &size);
 	napi_get_value_uint32(env, args[2], &firstStringSize);
 	uint8_t* source;
-	napi_get_typedarray_info(env, args[3], NULL, NULL, (void**) &source, NULL, NULL);
+	size_t buffer_size;
+	napi_get_buffer_info(env, args[2], (void**) &source, &buffer_size);
 	return extractor->extractStrings(env, position, size, firstStringSize, source);
 }
 #define EXPORT_NAPI_FUNCTION(name, func) { napi_property_descriptor desc = { name, 0, func, 0, 0, 0, (napi_property_attributes) (napi_writable | napi_configurable), 0 }; napi_define_properties(env, exports, 1, &desc); }

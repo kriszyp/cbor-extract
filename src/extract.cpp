@@ -34,14 +34,14 @@ public:
 	napi_value target[MAX_TARGET_SIZE + 1]; // leave one for the queued string
 
 	uint8_t* source;
-	int position = 0;
-	int writePosition = 0;
-	int stringStart = 0;
-	int lastStringEnd = 0;
+	uint32_t position = 0;
+	uint32_t writePosition = 0;
+	uint32_t stringStart = 0;
+	uint32_t lastStringEnd = 0;
 
-	void readString(napi_env env, int length, bool allowStringBlocks) {
-		int start = position;
-		int end = position + length;
+	void readString(napi_env env, uint32_t length, bool allowStringBlocks) {
+		uint32_t start = position;
+		uint32_t end = position + length;
 		if (allowStringBlocks) { // for larger strings, we don't bother to check every character for being latin, and just go right to creating a new string
 			while(position < end) {
 				if (source[position] < 0x80) // ensure we character is latin and can be decoded as one byte
@@ -79,7 +79,7 @@ public:
 		}
 		lastStringEnd = end;
 	}
-	napi_value extractStrings(napi_env env, int startingPosition, int size, int firstStringSize, uint8_t* inputSource) {
+	napi_value extractStrings(napi_env env, uint32_t startingPosition, uint32_t size, uint32_t firstStringSize, uint8_t* inputSource) {
 		writePosition = 0;
 		lastStringEnd = 0;
 		position = startingPosition;
@@ -90,7 +90,7 @@ public:
 			uint8_t majorType = token >> 5;
 			token = token & 0x1f;
 			if (majorType == 2 || majorType == 3) {
-				int length;
+				uint32_t length;
 				switch (token) {
 					case 0x18:
 						if (position + 1 > size) {

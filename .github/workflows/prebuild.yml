@@ -5,9 +5,9 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/')
     runs-on: macos-11
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v3
       - name: Setup node
-        uses: actions/setup-node@v2
+        uses: actions/setup-node@v3
         with:
           node-version: 18
       - run: python3 -m pip install setuptools
@@ -30,9 +30,9 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/')
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v3
       - name: Setup node
-        uses: actions/setup-node@v2
+        uses: actions/setup-node@v3
         with:
           node-version: 16
       - run: npm install
@@ -50,13 +50,13 @@ jobs:
     container: quay.io/pypa/manylinux2014_x86_64
     steps:
       #- run: ldd --version ldd
-      #- uses: actions/checkout@v2
+      #- uses: actions/checkout@v3
       #  with:
       #    repository: 'kriszyp/musl-bins'
       #- run: tar -xf aarch64-linux-musl-cross.tgz && pwd && ls
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v3
       - name: Setup node
-        uses: actions/setup-node@v2
+        uses: actions/setup-node@v3
         with:
           node-version: 14
       - run: curl https://raw.githubusercontent.com/kriszyp/musl-bins/main/aarch64-linux-musl-cross.tgz --output aarch64-linux-musl-cross.tgz
@@ -99,16 +99,16 @@ jobs:
   build-linux-arm:
     if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
-    container: quay.io/pypa/manylinux_2_24_x86_64
+    #container: quay.io/pypa/manylinux_2_24_x86_64
     steps:
-      - run: apt-get update
-      - run: apt-get install -y gcc-aarch64-linux-gnu gcc-arm-linux-gnueabihf g++-aarch64-linux-gnu g++-arm-linux-gnueabihf
+      - run: sudo apt-get update
+      - run: sudo apt-get install -y gcc-aarch64-linux-gnu gcc-arm-linux-gnueabihf g++-aarch64-linux-gnu g++-arm-linux-gnueabihf
       - run: ldd --version ldd
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v3
       - name: Setup node
-        uses: actions/setup-node@v2
+        uses: actions/setup-node@v3
         with:
-          node-version: 14
+          node-version: 16
       - run: npm install
       - run: npm run prebuild-libc
         if: startsWith(github.ref, 'refs/tags/')

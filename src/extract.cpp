@@ -84,6 +84,9 @@ public:
 		lastStringEnd = 0;
 		position = startingPosition;
 		source = inputSource;
+		if (startingPosition + firstStringSize > size) {
+			return unexpectedEnd(env);
+		}
 		readString(env, firstStringSize, firstStringSize < 0x100);
 		while (position < size) {
 			uint8_t token = source[position++];

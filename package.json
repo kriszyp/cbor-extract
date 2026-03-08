@@ -1,7 +1,7 @@
 {
   "name": "cbor-extract",
   "author": "Kris Zyp",
-  "version": "2.2.0",
+  "version": "2.2.1",
   "description": "Node addon for string extraction for cbor-x",
   "license": "MIT",
   "repository": {
@@ -14,7 +14,7 @@
     "before-publish": "prebuildify-ci download && node set-optional-deps.cjs",
     "prebuild": "prebuildify-platform-packages --target 20.10.0",
     "prebuild-win32": "prebuildify-platform-packages --target 20.10.0 && set ENABLE_V8_FUNCTIONS=false&& prebuildify-platform-packages --platform-packages --napi --target 20.10.0",
-    "prebuild-macos": "prebuildify-platform-packages --target 20.0.0 && ENABLE_V8_FUNCTIONS=false prebuildify-platform-packages --napi --platform-packages --target 20.10.0",
+    "prebuild-macos": "prebuildify-platform-packages --target 20.10.0 && ENABLE_V8_FUNCTIONS=false prebuildify-platform-packages --napi --platform-packages --target 20.10.0",
     "prebuild-libc": "prebuildify-platform-packages --tag-libc --target 20.10.0 && prebuildify-platform-packages --platform-packages --napi --tag-libc --target 16.14.2 && ENABLE_V8_FUNCTIONS=false prebuildify-platform-packages --platform-packages --napi --tag-libc --target 20.10.0",
     "prebuild-libc-alpine": "prebuildify-cross --image alpine --tag-libc --target 20.10.0",
     "publish-all": "cd prebuilds/win32-x64 && npm publish --access public && cd ../darwin-x64 && npm publish --access public && cd ../darwin-arm64 && npm publish --access public && cd ../linux-x64 && npm publish --access public && cd ../linux-arm64 && npm publish --access public  && cd ../linux-arm && npm publish --access public && cd ../.. && npm publish --access public",

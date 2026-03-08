@@ -10,7 +10,6 @@ jobs:
         uses: actions/setup-node@v3
         with:
           node-version: 20
-      - run: python3 -m pip install setuptools
       - run: npm install
       - run: npm test
       - run: npm run prebuild-macos

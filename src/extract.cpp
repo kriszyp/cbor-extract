@@ -84,7 +84,7 @@ public:
 		lastStringEnd = 0;
 		position = startingPosition;
 		source = inputSource;
-		if (startingPosition + firstStringSize > size) {
+		if ((uint64_t)startingPosition + firstStringSize > size) {
 			return unexpectedEnd(env);
 		}
 		readString(env, firstStringSize, firstStringSize < 0x100);
@@ -124,11 +124,11 @@ public:
 				}
 				if (majorType == 3) {
 					// string
-					if (length + position > size) {
+					if ((uint64_t)length + position > size) {
 						return unexpectedEnd(env);
 					}
 					readString(env, length, length < 0x100);
-					if (writePosition >= MAX_TARGET_SIZE)
+					if (writePosition >= MAX_TARGET_SIZE - 1) // reserve slot for double-write
 						break;
 				} else { // binary data
 					position += length;
@@ -193,6 +193,9 @@ napi_value extractStrings(napi_env env, napi_callback_info info) {
 	if (status) {
 		napi_throw_type_error(env, NULL, "Unexpected buffer type, expected a Buffer");
 		return args[0];
+	}
+	if (size > buffer_size || position > buffer_size) {
+		return unexpectedEnd(env);
 	}
 	return extractor->extractStrings(env, position, size, firstStringSize, source);
 }

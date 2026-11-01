@@ -18,7 +18,7 @@
     "prebuild-libc": "prebuildify-platform-packages --tag-libc --target 24.14.0 && ENABLE_V8_FUNCTIONS=false prebuildify-platform-packages --platform-packages --napi --tag-libc --target 20.20.0",
     "prebuild-libc-alpine": "ENABLE_V8_FUNCTIONS=false prebuildify-cross --image alpine --tag-libc --napi --target 20.20.0",
     "publish-all": "cd prebuilds/darwin-x64 && npm publish --access public && cd ../darwin-arm64 && npm publish --access public && cd ../linux-x64 && npm publish --access public && cd ../linux-arm64 && npm publish --access public  && cd ../linux-arm && npm publish --access public && cd ../.. && npm publish --access public",
-    "test": "node ./index.js"
+    "test": "node ./index.js && node test/scan.cjs && node test/strings.cjs"
   },
   "main": "./index.js",
   "gypfile": true,

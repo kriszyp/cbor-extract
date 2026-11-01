@@ -39,7 +39,24 @@ public:
 	uint32_t stringStart = 0;
 	uint32_t lastStringEnd = 0;
 
-	void readString(napi_env env, uint32_t length, bool allowStringBlocks) {
+	// false with a RangeError pending when V8 rejects the string (longer than its maximum length)
+	bool createString(napi_env env, uint32_t start, uint32_t length, bool latin1, napi_value* value) {
+		napi_status status = latin1 ?
+			napi_create_string_latin1(env, (const char*) source + start, length, value) :
+			napi_create_string_utf8(env, (const char*) source + start, length, value);
+		if (status != napi_ok) {
+			napi_throw_range_error(env, NULL, "Unable to create a string from the buffer");
+			return false;
+		}
+		return true;
+	}
+	bool appendString(napi_env env, uint32_t start, uint32_t length, bool latin1) {
+		if (!createString(env, start, length, latin1, &target[writePosition]))
+			return false;
+		writePosition++;
+		return true;
+	}
+	bool readString(napi_env env, uint32_t length, bool allowStringBlocks) {
 		uint32_t start = position;
 		uint32_t end = position + length;
 		if (allowStringBlocks) { // for larger strings, we don't bother to check every character for being latin, and just go right to creating a new string
@@ -54,30 +71,28 @@ public:
 		if (position < end) {
 			// non-latin character
 			if (lastStringEnd) {
-				napi_value value;
-				napi_create_string_latin1(env, (const char*) source + stringStart, lastStringEnd - stringStart, &value);
-				target[writePosition++] = value;
+				if (!appendString(env, stringStart, lastStringEnd - stringStart, true))
+					return false;
 				lastStringEnd = 0;
 			}
 			// use standard utf-8 conversion
-			napi_value value;
-			napi_create_string_utf8(env, (const char*) source + start, (int) length, &value);
-			target[writePosition++] = value;
+			if (!appendString(env, start, length, false))
+				return false;
 			position = end;
-			return;
+			return true;
 		}
 
 		if (lastStringEnd) {
 			if (start - lastStringEnd > 40 || end - stringStart > 6000) {
-				napi_value value;
-				napi_create_string_latin1(env, (const char*) source + stringStart, lastStringEnd - stringStart, &value);
-				target[writePosition++] = value;
+				if (!appendString(env, stringStart, lastStringEnd - stringStart, true))
+					return false;
 				stringStart = start;
 			}
 		} else {
 			stringStart = start;
 		}
 		lastStringEnd = end;
+		return true;
 	}
 	napi_value extractStrings(napi_env env, uint32_t startingPosition, uint32_t size, uint32_t firstStringSize, uint8_t* inputSource) {
 		writePosition = 0;
@@ -87,7 +102,8 @@ public:
 		if ((uint64_t)startingPosition + firstStringSize > size) {
 			return unexpectedEnd(env);
 		}
-		readString(env, firstStringSize, firstStringSize < 0x100);
+		if (!readString(env, firstStringSize, firstStringSize < 0x100))
+			return NULL;
 		while (position < size) {
 			uint8_t token = source[position++];
 			uint8_t majorType = token >> 5;
@@ -96,23 +112,23 @@ public:
 				uint32_t length;
 				switch (token) {
 					case 0x18:
-						if (position + 1 > size) {
+						if (size - position < 1) {
 							return unexpectedEnd(env);
 						}
 						length = source[position++];
 						break;
 					case 0x19:
-						if (position + 2 > size) {
+						if (size - position < 2) {
 							return unexpectedEnd(env);
 						}
 						length = source[position++] << 8;
 						length += source[position++];
 						break;
 					case 0x1a:
-						if (position + 4 > size) {
+						if (size - position < 4) {
 							return unexpectedEnd(env);
 						}
-						length = source[position++] << 24;
+						length = (uint32_t) source[position++] << 24;
 						length += source[position++] << 16;
 						length += source[position++] << 8;
 						length += source[position++];
@@ -124,13 +140,16 @@ public:
 				}
 				if (majorType == 3) {
 					// string
-					if ((uint64_t)length + position > size) {
+					if (length > size - position) {
 						return unexpectedEnd(env);
 					}
-					readString(env, length, length < 0x100);
+					if (!readString(env, length, length < 0x100))
+						return NULL;
 					if (writePosition >= MAX_TARGET_SIZE - 1) // reserve slot for double-write
 						break;
 				} else { // binary data
+					if (length >= size - position) // a declared length that reaches the end ends the scan, and can't wrap position
+						break;
 					position += length;
 				}
 
@@ -153,7 +172,8 @@ public:
 		}
 		if (lastStringEnd) {
 			napi_value value;
-			napi_create_string_latin1(env, (const char*) source + stringStart, lastStringEnd - stringStart, &value);
+			if (!createString(env, stringStart, lastStringEnd - stringStart, true, &value))
+				return NULL;
 			if (writePosition == 0) {
 				return value;
 			}
@@ -197,6 +217,9 @@ napi_value extractStrings(napi_env env, napi_callback_info info) {
 	if (size > buffer_size || position > buffer_size) {
 		return unexpectedEnd(env);
 	}
+	// fixed-size skips advance by at most 8 past a position below size, so this keeps them from wrapping
+	if (size > UINT32_MAX - 8)
+		size = UINT32_MAX - 8;
 	return extractor->extractStrings(env, position, size, firstStringSize, source);
 }
 #define EXPORT_NAPI_FUNCTION(name, func) { napi_property_descriptor desc = { name, 0, func, 0, 0, 0, (napi_property_attributes) (napi_writable | napi_configurable), 0 }; napi_define_properties(env, exports, 1, &desc); }

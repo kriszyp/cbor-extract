@@ -13,7 +13,8 @@ if (process.argv[3] === 'child') {
 	}
 	process.exit(0)
 }
-const child = spawnSync(process.execPath, [__filename, addon, 'child'], { timeout: 10000, stdio: 'inherit' })
+// generous: Node alone takes ~10s to start under QEMU armv7 emulation; a real hang never returns
+const child = spawnSync(process.execPath, [__filename, addon, 'child'], { timeout: 120000, stdio: 'inherit' })
 assert.equal(child.signal, null, 'extractStrings did not return')
 assert.equal(child.status, 0)
 console.log('extractStrings scan bounds passed')

@@ -14,7 +14,7 @@
   ],
   "scripts": {
     "build": "node-gyp rebuild",
-    "test": "node test/strings.cjs && node test/scan.cjs"
+    "test": "node --test \"test/*.test.cjs\""
   },
   "devDependencies": {
     "node-gyp": "13.1.0"

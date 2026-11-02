@@ -151,7 +151,7 @@ jobs:
           TEST_IMAGES: ${{ matrix.test }}
         run: |
           for image in $TEST_IMAGES; do
-            docker run --rm --user "$(id -u)" -v "$PWD:/w:ro" -w /w "$image" sh -ec 'node --version; node test/strings.cjs; node test/scan.cjs'
+            docker run --rm --user "$(id -u)" -v "$PWD:/w:ro" -w /w "$image" sh -ec 'node --version; node --test "test/*.test.cjs"'
           done
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:

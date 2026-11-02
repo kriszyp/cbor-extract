@@ -6,9 +6,6 @@ times as necessary to get more strings. This must be partially capable of parsin
 find the string tokens and determine their position and length. All strings are decoded as UTF-8.
 */
 #include <node_api.h>
-#if ENABLE_V8_API
-#include <v8.h>
-#endif
 
 #ifndef thread_local
 #ifdef __GNUC__
@@ -23,6 +20,8 @@ find the string tokens and determine their position and length. All strings are 
 #endif
 
 const int MAX_TARGET_SIZE = 255;
+// Array.of, captured at module load: one call builds the result array, which is about twice as fast as napi_set_element per string
+static thread_local napi_ref arrayOfRef;
 napi_value unexpectedEnd(napi_env env) {
 	napi_value returnValue;
 	napi_get_undefined(env, &returnValue);
@@ -181,16 +180,10 @@ public:
 		} else if (writePosition == 1) {
 			return target[0];
 		}
-		napi_value array;
-		#if ENABLE_V8_API
-		v8::Local<v8::Array> v8Array = v8::Array::New(v8::Isolate::GetCurrent(), (v8::Local<v8::Value>*) target, writePosition);
-		memcpy(&array, &v8Array, sizeof(array));
-		#else
-		napi_create_array_with_length(env, writePosition, &array);
-		for (int i = 0; i < writePosition; i++) {
-			napi_set_element(env, array, i, target[i]);
-		}
-		#endif
+		napi_value array = nullptr, arrayOf, undefined;
+		napi_get_reference_value(env, arrayOfRef, &arrayOf);
+		napi_get_undefined(env, &undefined);
+		napi_call_function(env, undefined, arrayOf, writePosition, target, &array); // on failure the exception is pending
 		return array;
 	}
 };
@@ -226,6 +219,11 @@ napi_value extractStrings(napi_env env, napi_callback_info info) {
 
 NAPI_MODULE_INIT() {
 	extractor = new Extractor(); // create our thread-local extractor
+	napi_value global, arrayConstructor, arrayOf;
+	napi_get_global(env, &global);
+	napi_get_named_property(env, global, "Array", &arrayConstructor);
+	napi_get_named_property(env, arrayConstructor, "of", &arrayOf);
+	napi_create_reference(env, arrayOf, 1, &arrayOfRef);
 	EXPORT_NAPI_FUNCTION("extractStrings", extractStrings);
 	return exports;
 }

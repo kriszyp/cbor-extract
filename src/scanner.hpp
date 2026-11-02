@@ -78,12 +78,14 @@ namespace detail {
 	return true;
 }
 
-// compilers turn this into a single load and byte swap for each width
+// Width is 1, 2, 4 or 8. Each is spelled out so it compiles to one load and byte swap: built up byte by byte in a
+// 64-bit value, GCC loads 2 bytes separately.
 template <std::size_t Width> [[nodiscard]] constexpr std::uint64_t readBigEndian(const std::uint8_t* bytes) {
-	std::uint64_t value = 0;
-	for (std::size_t i = 0; i < Width; i++)
-		value = (value << 8) | bytes[i];
-	return value;
+	if constexpr (Width == 1) return bytes[0];
+	else if constexpr (Width == 2) return static_cast<std::uint16_t>(bytes[0] << 8 | bytes[1]);
+	else if constexpr (Width == 4) {
+		return std::uint32_t{bytes[0]} << 24 | std::uint32_t{bytes[1]} << 16 | std::uint32_t{bytes[2]} << 8 | bytes[3];
+	} else return readBigEndian<4>(bytes) << 32 | readBigEndian<4>(bytes + 4);
 }
 
 template <SliceSink Sink> class Scan {

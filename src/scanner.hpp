@@ -108,9 +108,8 @@ public:
 			const std::uint8_t majorType = token >> 5;
 			const std::uint8_t info = token & 0x1f;
 			if (majorType == 2 || majorType == 3) {
-				if (info > 27)
-					break; // indefinite length or reserved: cbor-x handles (or rejects) it when it gets there
 				std::uint64_t length;
+				// 28 to 31 sit in the same switch as the widths, so the compiler dispatches on info with one jump
 				switch (info) {
 					case 24:
 						if (size - position < 1) return std::unexpected(ScanError::unexpectedEnd);
@@ -132,6 +131,10 @@ public:
 						length = readBigEndian<8>(data + position);
 						position += 8;
 						break;
+					case 28:
+					case 29:
+					case 30:
+					case 31: return finish(); // indefinite length or reserved: cbor-x handles (or rejects) it there
 					default: length = info;
 				}
 				if (majorType == 3) {
@@ -154,8 +157,7 @@ public:
 				}
 			}
 		}
-		if (inRun && !closeRun()) return std::unexpected(ScanError::rejected);
-		return {};
+		return finish();
 	}
 
 private:
@@ -165,6 +167,11 @@ private:
 	std::size_t runStart = 0;
 	std::size_t runEnd = 0;
 
+	// adds the run left open, if any
+	constexpr std::expected<void, ScanError> finish() {
+		if (inRun && !closeRun()) return std::unexpected(ScanError::rejected);
+		return {};
+	}
 	constexpr bool add(const StringSlice& slice) {
 		count++;
 		return sink(slice);

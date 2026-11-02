@@ -51,28 +51,27 @@ Result<Arguments> readArguments(napi_env env, napi_callback_info info) {
 	};
 }
 
-Result<napi_value> createString(napi_env env, std::span<const std::uint8_t> source, const StringSlice& slice) {
-	const auto bytes = source.subspan(slice.start, slice.length);
-	// a zero-length Buffer may have no data pointer, which Node-API rejects even for an empty string
-	const char* chars = bytes.empty() ? "" : reinterpret_cast<const char*>(bytes.data());
-	napi_value string;
-	const napi_status status = slice.encoding == Encoding::latin1 ?
-			napi_create_string_latin1(env, chars, bytes.size(), &string) :
-			napi_create_string_utf8(env, chars, bytes.size(), &string);
-	if (auto ok = check(status, Error::stringTooLong); !ok) return std::unexpected(ok.error());
-	return string;
-}
-
 // The scan's sink: creates each string as soon as the scan finds it
 class Strings {
 public:
 	Strings(napi_env env, std::span<const std::uint8_t> source) : env(env), source(source) {}
 
+	// Called for every string, so it stays small: the string is written straight into its slot, and nothing is
+	// wrapped in a Result, which costs a copy and a test per string on this path.
 	bool operator()(const StringSlice& slice) {
-		if (count == strings.size()) return fail(Error::tooManyStrings); // the scan stops at MAX_SLICES, so never
-		const auto string = createString(env, source, slice);
-		if (!string) return fail(string.error());
-		strings[count++] = *string;
+		if (count == strings.size()) [[unlikely]] {
+			return fail(Error::tooManyStrings); // the scan stops at MAX_SLICES, so never
+		}
+		// the scan only hands over slices inside source; a zero-length Buffer may have no data pointer, which Node-API
+		// rejects even for an empty string
+		const char* chars = slice.length == 0 ? "" : reinterpret_cast<const char*>(source.data() + slice.start);
+		const napi_status status = slice.encoding == Encoding::latin1 ?
+				napi_create_string_latin1(env, chars, slice.length, &strings[count]) :
+				napi_create_string_utf8(env, chars, slice.length, &strings[count]);
+		if (status != napi_ok) [[unlikely]] {
+			return fail(Error::stringTooLong); // past V8's maximum string length
+		}
+		count++;
 		return true;
 	}
 	// why the sink stopped the scan

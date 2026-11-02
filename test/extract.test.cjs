@@ -38,6 +38,23 @@ test('a non-ASCII string is its own element and flushes the run before it', () =
 	assert.deepEqual(extract('中', '😀'), ['中', '😀'])
 })
 
+test('one byte of 0x80 or more anywhere in a short string makes it UTF-8, whatever its length and alignment', () => {
+	// the ASCII check reads whole words, pairs of 4 bytes or single bytes depending on the length
+	for (let length = 1; length <= 40; length++) {
+		for (let at = 0; at < length; at++) {
+			for (let offset = 0; offset < 8; offset++) {
+				const bytes = Buffer.alloc(length, 'x')
+				bytes[at] = 0xe9 // invalid UTF-8 on its own: decoded as U+FFFD, where latin1 would give é
+				const doc = document('a'.repeat(offset + 1), { string: bytes }, 'b')
+				const result = extractStrings(...doc.args)
+				assert.deepEqual(result, ['a'.repeat(offset + 1), bytes.toString(), 'b'], `length ${length}, byte ${at}, offset ${offset}`)
+			}
+		}
+		const doc = document('a', 'x'.repeat(length), 'b')
+		assert.equal(extractStrings(...doc.args), doc.source.toString('latin1', 1), `ASCII, length ${length}`)
+	}
+})
+
 test('a string of 256 bytes or more is decoded as UTF-8, outside any run', () => {
 	const long = 'x'.repeat(256)
 	assert.deepEqual(extract('ab', long, 'cd'), ['ab', long, 'cd'])

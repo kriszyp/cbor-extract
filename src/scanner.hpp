@@ -6,7 +6,6 @@
 #pragma once
 
 #include <algorithm>
-#include <bit>
 #include <concepts>
 #include <cstddef>
 #include <cstdint>
@@ -50,27 +49,36 @@ concept SliceSink = std::invocable<Sink&, const StringSlice&> &&
 
 namespace detail {
 
-// data[start, start + length) has no byte >= 0x80. At run time it reads whole 8 byte words, about one branch per word
-// instead of one per byte; a string of 1 to 7 bytes is checked with the one word that ends where it ends, masking off
-// the bytes before it, which are still inside data whenever the string ends at 8 or later.
+// an unaligned word from bytes, in native byte order
+template <typename Word> [[nodiscard]] Word load(const std::uint8_t* bytes) {
+	Word word;
+	std::memcpy(&word, bytes, sizeof word);
+	return word;
+}
+
+// data[start, start + length) has no byte >= 0x80. At run time it ORs bytes together and tests the high bits once,
+// reading only inside the string: words that may overlap for 8 bytes or more, two 4 byte words that may overlap for 4
+// to 7, and the first, middle and last byte for 1 to 3. Byte order does not matter for an OR.
 [[nodiscard]] constexpr bool isAscii(const std::uint8_t* data, std::size_t start, std::size_t length) {
-	constexpr std::uint64_t highBits = 0x8080808080808080;
 	const std::size_t end = start + length;
-	if (!std::is_constant_evaluated() && std::endian::native == std::endian::little) {
-		const auto wordAt = [data](std::size_t at) {
-			std::uint64_t word;
-			std::memcpy(&word, data + at, 8);
-			return word;
-		};
+	if (!std::is_constant_evaluated()) {
+		const auto wordAt = [data](std::size_t at) { return load<std::uint64_t>(data + at); };
+		constexpr std::uint64_t highBits = 0x8080808080808080;
 		if (length >= 8) {
-			for (std::size_t at = start; at < end - 8; at += 8) {
-				if (wordAt(at) & highBits) return false;
-			}
-			return (wordAt(end - 8) & highBits) == 0; // overlaps the previous word when length is not a multiple of 8
+			// the last word is tested first, so most non-ASCII strings stop there; the rest is ORed and tested once,
+			// as a loop with no exit but its end runs faster, and strings here are under SHORT_STRING bytes
+			std::uint64_t bits = wordAt(end - 8); // overlaps the last whole word when length is not a multiple of 8
+			if (bits & highBits) return false;
+			std::size_t at = start;
+			for (; end - at > 16; at += 16)
+				bits |= wordAt(at) | wordAt(at + 8);
+			if (end - at > 8) bits |= wordAt(at);
+			return (bits & highBits) == 0;
 		}
+		if (length >= 4)
+			return ((load<std::uint32_t>(data + start) | load<std::uint32_t>(data + end - 4)) & 0x80808080) == 0;
 		if (length == 0) return true;
-		// little-endian: the string's bytes are the high length bytes of the word
-		if (end >= 8) return (wordAt(end - 8) & highBits & (~std::uint64_t{0} << (8 * (8 - length)))) == 0;
+		return ((data[start] | data[start + length / 2] | data[end - 1]) & 0x80) == 0;
 	}
 	for (std::size_t at = start; at < end; at++) {
 		if (data[at] & 0x80) return false;

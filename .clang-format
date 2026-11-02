@@ -1,0 +1,20 @@
+# The style of src/: tabs, attached braces, short statements on one line. Editors that format on save pick this up.
+BasedOnStyle: LLVM
+UseTab: Always
+IndentWidth: 4
+TabWidth: 4
+ContinuationIndentWidth: 8
+ColumnLimit: 120
+AccessModifierOffset: -4
+IndentCaseLabels: true
+NamespaceIndentation: None
+AlignAfterOpenBracket: DontAlign
+AlignOperands: DontAlign
+BreakBeforeTernaryOperators: false
+AllowShortIfStatementsOnASingleLine: AllIfsAndElse
+AllowShortCaseLabelsOnASingleLine: true
+AllowShortFunctionsOnASingleLine: All
+AllowShortLambdasOnASingleLine: All
+AllowShortBlocksOnASingleLine: Empty
+PointerAlignment: Left
+IncludeBlocks: Preserve

@@ -1,229 +1,240 @@
 /*
-This is responsible for extracting the strings, in bulk, from a CBOR buffer. Creating strings from buffers can
-be one of the biggest performance bottlenecks of parsing, but creating an array of extracting strings all at once
-provides much better performance. This will parse and produce up to 256 strings at once .The JS parser can call this multiple
-times as necessary to get more strings. This must be partially capable of parsing CBOR so it can know where to
-find the string tokens and determine their position and length. All strings are decoded as UTF-8.
+Extracts the strings of a CBOR buffer in bulk for cbor-x. Creating JS strings one at a time is one of the biggest costs of
+decoding, so this scans ahead from the string cbor-x is reading and creates up to 255 strings in one call; cbor-x calls it
+again when it needs more. Short ASCII strings that sit close together come back as one latin1 "run" that also holds the
+bytes between them, which cbor-x slices by offset; every other string is its own UTF-8 element. It parses only as much
+CBOR as it needs to find text strings: the length of byte and text strings, and how many argument bytes other tokens have.
 */
 #include <node_api.h>
+#include <cmath>
+#include <cstdint>
+#include <cstring>
 
-#ifndef thread_local
-#ifdef __GNUC__
-# define thread_local __thread
-#elif __STDC_VERSION__ >= 201112L
-# define thread_local _Thread_local
-#elif defined(_MSC_VER)
-# define thread_local __declspec(thread)
-#else
-# define thread_local
-#endif
-#endif
+namespace {
 
-const int MAX_TARGET_SIZE = 255;
-// Array.of, captured at module load: one call builds the result array, which is about twice as fast as napi_set_element per string
-static thread_local napi_ref arrayOfRef;
-napi_value unexpectedEnd(napi_env env) {
-	napi_value returnValue;
-	napi_get_undefined(env, &returnValue);
-	napi_throw_type_error(env, NULL, "Unexpected end of buffer reading string");
-	return returnValue;
+constexpr size_t MAX_STRINGS = 254; // the scan stops once this many are created; one more slot holds the run left open
+constexpr size_t SHORT_STRING = 0x100; // ASCII strings shorter than this can join a run
+constexpr size_t MAX_GAP = 40; // most bytes between two strings of one run
+constexpr size_t MAX_RUN = 6000; // most bytes in one run
+constexpr double MAX_SAFE_INTEGER = 9007199254740991.0;
+
+// throws unless an exception is already pending (a failed Node-API call may have thrown its own)
+napi_value fail(napi_env env, const char* message, bool typeError = true) {
+	bool pending = false;
+	napi_is_exception_pending(env, &pending);
+	if (!pending) {
+		if (typeError) napi_throw_type_error(env, nullptr, message);
+		else napi_throw_range_error(env, nullptr, message);
+	}
+	return nullptr;
 }
+napi_value unexpectedEnd(napi_env env) {
+	return fail(env, "Unexpected end of buffer reading string");
+}
+
+// whole words first: about one branch per 8 bytes instead of one per byte
+bool isAscii(const uint8_t* bytes, size_t length) {
+	size_t i = 0;
+	for (; i + 8 <= length; i += 8) {
+		uint64_t word;
+		std::memcpy(&word, bytes + i, 8);
+		if (word & 0x8080808080808080ULL) return false;
+	}
+	for (; i < length; i++) {
+		if (bytes[i] & 0x80) return false;
+	}
+	return true;
+}
+
+// bytes is 1, 2, 4 or 8; a switch lets each width compile to straight-line loads
+uint64_t readBigEndian(const uint8_t* bytes, size_t width) {
+	switch (width) {
+		case 1: return bytes[0];
+		case 2: return uint64_t(bytes[0]) << 8 | bytes[1];
+		case 4: return uint64_t(bytes[0]) << 24 | uint64_t(bytes[1]) << 16 | uint64_t(bytes[2]) << 8 | bytes[3];
+		default: return readBigEndian(bytes, 4) << 32 | readBigEndian(bytes + 4, 4);
+	}
+}
+
+// lives on the stack for one call, so nothing is shared between calls, threads or environments
 class Extractor {
 public:
-	napi_value target[MAX_TARGET_SIZE + 1]; // leave one for the queued string
+	Extractor(napi_env env, const uint8_t* source) : env(env), source(source) {}
 
-	uint8_t* source;
-	uint32_t position = 0;
-	uint32_t writePosition = 0;
-	uint32_t stringStart = 0;
-	uint32_t lastStringEnd = 0;
-
-	// false with a RangeError pending when V8 rejects the string (longer than its maximum length)
-	bool createString(napi_env env, uint32_t start, uint32_t length, bool latin1, napi_value* value) {
-		napi_status status = latin1 ?
-			napi_create_string_latin1(env, (const char*) source + start, length, value) :
-			napi_create_string_utf8(env, (const char*) source + start, length, value);
-		if (status != napi_ok) {
-			napi_throw_range_error(env, NULL, "Unable to create a string from the buffer");
-			return false;
-		}
-		return true;
-	}
-	bool appendString(napi_env env, uint32_t start, uint32_t length, bool latin1) {
-		if (!createString(env, start, length, latin1, &target[writePosition]))
-			return false;
-		writePosition++;
-		return true;
-	}
-	bool readString(napi_env env, uint32_t length, bool allowStringBlocks) {
-		uint32_t start = position;
-		uint32_t end = position + length;
-		if (allowStringBlocks) { // for larger strings, we don't bother to check every character for being latin, and just go right to creating a new string
-			while(position < end) {
-				if (source[position] < 0x80) // ensure we character is latin and can be decoded as one byte
-					position++;
-				else {
-					break;
-				}
-			}
-		}
-		if (position < end) {
-			// non-latin character
-			if (lastStringEnd) {
-				if (!appendString(env, stringStart, lastStringEnd - stringStart, true))
-					return false;
-				lastStringEnd = 0;
-			}
-			// use standard utf-8 conversion
-			if (!appendString(env, start, length, false))
-				return false;
-			position = end;
-			return true;
-		}
-
-		if (lastStringEnd) {
-			if (start - lastStringEnd > 40 || end - stringStart > 6000) {
-				if (!appendString(env, stringStart, lastStringEnd - stringStart, true))
-					return false;
-				stringStart = start;
-			}
-		} else {
-			stringStart = start;
-		}
-		lastStringEnd = end;
-		return true;
-	}
-	napi_value extractStrings(napi_env env, uint32_t startingPosition, uint32_t size, uint32_t firstStringSize, uint8_t* inputSource) {
-		writePosition = 0;
-		lastStringEnd = 0;
-		position = startingPosition;
-		source = inputSource;
-		if ((uint64_t)startingPosition + firstStringSize > size) {
-			return unexpectedEnd(env);
-		}
-		if (!readString(env, firstStringSize, firstStringSize < 0x100))
-			return NULL;
+	// position is the start of the first string, and firstLength fits before size; returns nullptr with an exception pending
+	napi_value extract(size_t position, size_t size, size_t firstLength, napi_ref arrayOfRef) {
+		// position, size and data stay locals so they live in registers: members could alias the bytes read through source.
+		// Each switch case advances by a constant: a lookup table of widths would put a memory load in the chain from one
+		// token's position to the next, where a jump the CPU predicts does not.
+		const uint8_t* const data = source;
+		// skipping a token's argument bytes advances at most 8 past a position below size, which must not wrap
+		if (size > SIZE_MAX - 8) size = SIZE_MAX - 8;
+		if (!readString(position, firstLength)) return nullptr;
+		position += firstLength;
 		while (position < size) {
-			uint8_t token = source[position++];
+			uint8_t token = data[position++];
 			uint8_t majorType = token >> 5;
-			token = token & 0x1f;
+			uint8_t info = token & 0x1f;
 			if (majorType == 2 || majorType == 3) {
-				uint32_t length;
-				switch (token) {
-					case 0x18:
-						if (size - position < 1) {
-							return unexpectedEnd(env);
-						}
-						length = source[position++];
+				uint64_t length;
+				switch (info) {
+					case 24:
+						if (size - position < 1) return unexpectedEnd(env);
+						length = data[position];
+						position += 1;
 						break;
-					case 0x19:
-						if (size - position < 2) {
-							return unexpectedEnd(env);
-						}
-						length = source[position++] << 8;
-						length += source[position++];
-						break;
-					case 0x1a:
-						if (size - position < 4) {
-							return unexpectedEnd(env);
-						}
-						length = (uint32_t) source[position++] << 24;
-						length += source[position++] << 16;
-						length += source[position++] << 8;
-						length += source[position++];
-						break;
-					case 0x1b:
-						return unexpectedEnd(env);
-					default:
-						length = token;
-				}
-				if (majorType == 3) {
-					// string
-					if (length > size - position) {
-						return unexpectedEnd(env);
-					}
-					if (!readString(env, length, length < 0x100))
-						return NULL;
-					if (writePosition >= MAX_TARGET_SIZE - 1) // reserve slot for double-write
-						break;
-				} else { // binary data
-					if (length >= size - position) // a declared length that reaches the end ends the scan, and can't wrap position
-						break;
-					position += length;
-				}
-
-			} else { // all other tokens
-				switch (token) {
-					case 0x18:
-						position++;
-						break;
-					case 0x19:
+					case 25:
+						if (size - position < 2) return unexpectedEnd(env);
+						length = readBigEndian(data + position, 2);
 						position += 2;
 						break;
-					case 0x1a:
+					case 26:
+						if (size - position < 4) return unexpectedEnd(env);
+						length = readBigEndian(data + position, 4);
 						position += 4;
 						break;
-					case 0x1b:
+					case 27:
+						if (size - position < 8) return unexpectedEnd(env);
+						length = readBigEndian(data + position, 8);
 						position += 8;
 						break;
+					case 28: case 29: case 30: case 31:
+						goto done; // indefinite length or reserved: cbor-x handles (or rejects) it when it gets there
+					default:
+						length = info;
+				}
+				if (majorType == 3) {
+					if (length > size - position) return unexpectedEnd(env);
+					if (!readString(position, size_t(length))) return nullptr;
+					position += size_t(length);
+					if (count >= MAX_STRINGS) break;
+				} else {
+					if (length >= size - position) break; // reaches the end, so there is nothing after it to scan
+					position += size_t(length);
+				}
+			} else { // the other major types only have argument bytes to skip; going past size just ends the loop
+				switch (info) {
+					case 24: position += 1; break;
+					case 25: position += 2; break;
+					case 26: position += 4; break;
+					case 27: position += 8; break;
 				}
 			}
 		}
-		if (lastStringEnd) {
-			napi_value value;
-			if (!createString(env, stringStart, lastStringEnd - stringStart, true, &value))
-				return NULL;
-			if (writePosition == 0) {
-				return value;
-			}
-			target[writePosition++] = value;
-		} else if (writePosition == 1) {
-			return target[0];
+	done:
+		if (inRun) {
+			napi_value run;
+			if (!createString(runStart, runEnd - runStart, true, &run)) return nullptr;
+			if (count == 0) return run;
+			strings[count++] = run;
+		} else if (count == 1) {
+			return strings[0];
 		}
-		napi_value array = nullptr, arrayOf, undefined;
-		napi_get_reference_value(env, arrayOfRef, &arrayOf);
-		napi_get_undefined(env, &undefined);
-		napi_call_function(env, undefined, arrayOf, writePosition, target, &array); // on failure the exception is pending
+		// one Array.of call builds the result about twice as fast as napi_set_element per string
+		napi_value arrayOf, undefined, array;
+		if (napi_get_reference_value(env, arrayOfRef, &arrayOf) != napi_ok || arrayOf == nullptr ||
+				napi_get_undefined(env, &undefined) != napi_ok ||
+				napi_call_function(env, undefined, arrayOf, count, strings, &array) != napi_ok) {
+			return fail(env, "Unable to create the array of strings");
+		}
 		return array;
+	}
+
+private:
+	napi_env env;
+	const uint8_t* source;
+	napi_value strings[MAX_STRINGS + 2]; // a string can flush the open run as well, and the last run is added at the end
+	size_t count = 0;
+	bool inRun = false; // runStart..runEnd is a latin1 run not created yet
+	size_t runStart = 0;
+	size_t runEnd = 0;
+
+	bool createString(size_t start, size_t length, bool latin1, napi_value* value) {
+		const char* chars = length ? reinterpret_cast<const char*>(source + start) : ""; // a zero-length Buffer may have no data
+		napi_status status = latin1 ?
+			napi_create_string_latin1(env, chars, length, value) :
+			napi_create_string_utf8(env, chars, length, value);
+		if (status != napi_ok) {
+			fail(env, "Unable to create a string from the buffer", false); // longer than V8's maximum string length
+			return false;
+		}
+		return true;
+	}
+	bool append(size_t start, size_t length, bool latin1) {
+		if (!createString(start, length, latin1, &strings[count])) return false;
+		count++;
+		return true;
+	}
+	bool closeRun() {
+		inRun = false;
+		return append(runStart, runEnd - runStart, true);
+	}
+	// the caller checked that the string fits before size
+	bool readString(size_t start, size_t length) {
+		size_t end = start + length;
+		// longer strings are not worth checking byte by byte: they go straight to UTF-8
+		if (length < SHORT_STRING && isAscii(source + start, length)) {
+			if (inRun && (start - runEnd > MAX_GAP || end - runStart > MAX_RUN)) {
+				if (!closeRun()) return false;
+			}
+			if (!inRun) {
+				inRun = true;
+				runStart = start;
+			}
+			runEnd = end;
+			return true;
+		}
+		if (inRun && !closeRun()) return false;
+		return append(start, length, false);
 	}
 };
 
-static thread_local Extractor* extractor;
+// a non-negative integer argument, read as a double so values past 2^32 are rejected instead of wrapping
+bool getIndex(napi_env env, napi_value value, double* result) {
+	return napi_get_value_double(env, value, result) == napi_ok &&
+		*result >= 0 && *result <= MAX_SAFE_INTEGER && std::floor(*result) == *result;
+}
 
+// extractStrings(position, size, firstStringSize, buffer)
 napi_value extractStrings(napi_env env, napi_callback_info info) {
 	size_t argc = 4;
-	napi_value args[4];
-	napi_get_cb_info(env, info, &argc, args, NULL, NULL);
-	uint32_t position;
-	uint32_t size;
-	uint32_t firstStringSize;
-	napi_get_value_uint32(env, args[0], &position);
-	napi_get_value_uint32(env, args[1], &size);
-	napi_get_value_uint32(env, args[2], &firstStringSize);
-	uint8_t* source;
-	size_t buffer_size;
-	napi_status status = napi_get_buffer_info(env, args[3], (void**) &source, &buffer_size);
-	if (status) {
-		napi_throw_type_error(env, NULL, "Unexpected buffer type, expected a Buffer");
-		return args[0];
+	napi_value args[4]; // missing arguments come back as undefined
+	void* data;
+	if (napi_get_cb_info(env, info, &argc, args, nullptr, &data) != napi_ok) return fail(env, "Unable to read the arguments");
+	void* source;
+	size_t bufferSize;
+	if (napi_get_buffer_info(env, args[3], &source, &bufferSize) != napi_ok) return fail(env, "Unexpected buffer type, expected a Buffer");
+	double position, size, firstStringSize;
+	if (!getIndex(env, args[0], &position) || !getIndex(env, args[1], &size) || !getIndex(env, args[2], &firstStringSize)) {
+		return fail(env, "Expected the position, size and string length to be non-negative integers");
 	}
-	if (size > buffer_size || position > buffer_size) {
-		return unexpectedEnd(env);
-	}
-	// fixed-size skips advance by at most 8 past a position below size, so this keeps them from wrapping
-	if (size > UINT32_MAX - 8)
-		size = UINT32_MAX - 8;
-	return extractor->extractStrings(env, position, size, firstStringSize, source);
+	if (size > double(bufferSize) || position > size || firstStringSize > size - position) return unexpectedEnd(env);
+	Extractor extractor(env, static_cast<const uint8_t*>(source));
+	return extractor.extract(size_t(position), size_t(size), size_t(firstStringSize), static_cast<napi_ref>(data));
 }
-#define EXPORT_NAPI_FUNCTION(name, func) { napi_property_descriptor desc = { name, 0, func, 0, 0, 0, (napi_property_attributes) (napi_writable | napi_configurable), 0 }; napi_define_properties(env, exports, 1, &desc); }
+
+} // namespace
 
 NAPI_MODULE_INIT() {
-	extractor = new Extractor(); // create our thread-local extractor
-	napi_value global, arrayConstructor, arrayOf;
-	napi_get_global(env, &global);
-	napi_get_named_property(env, global, "Array", &arrayConstructor);
-	napi_get_named_property(env, arrayConstructor, "of", &arrayOf);
-	napi_create_reference(env, arrayOf, 1, &arrayOfRef);
-	EXPORT_NAPI_FUNCTION("extractStrings", extractStrings);
+	// Array.of is captured once, at load time, so later changes to it do not affect results
+	napi_value global, arrayConstructor, arrayOf, function;
+	napi_valuetype type;
+	napi_ref arrayOfRef;
+	if (napi_get_global(env, &global) != napi_ok ||
+			napi_get_named_property(env, global, "Array", &arrayConstructor) != napi_ok ||
+			napi_get_named_property(env, arrayConstructor, "of", &arrayOf) != napi_ok ||
+			napi_typeof(env, arrayOf, &type) != napi_ok || type != napi_function) {
+		return fail(env, "cbor-extract needs Array.of");
+	}
+	if (napi_create_reference(env, arrayOf, 1, &arrayOfRef) != napi_ok) return fail(env, "Unable to initialize cbor-extract");
+	// Node-API only unlinks a reference it did not create when the environment goes away, so the function deletes it
+	// when it is collected or at teardown (once per Worker, or per load after clearing require.cache)
+	auto deleteReference = [](napi_env env, void* data, void*) { napi_delete_reference(env, static_cast<napi_ref>(data)); };
+	if (napi_create_function(env, "extractStrings", NAPI_AUTO_LENGTH, extractStrings, arrayOfRef, &function) != napi_ok ||
+			napi_add_finalizer(env, function, arrayOfRef, deleteReference, nullptr, nullptr) != napi_ok) {
+		napi_delete_reference(env, arrayOfRef);
+		return fail(env, "Unable to initialize cbor-extract");
+	}
+	if (napi_set_named_property(env, exports, "extractStrings", function) != napi_ok) return fail(env, "Unable to initialize cbor-extract");
 	return exports;
 }

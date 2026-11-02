@@ -93,10 +93,76 @@ test('truncated input throws a TypeError', () => {
 	for (const tail of [text('abcdef').subarray(0, 4), Buffer.from([0x78]), Buffer.from([0x79, 0]), Buffer.from([0x7a, 0, 0, 0])]) {
 		assert.throws(() => extract('é', tail), unexpectedEnd, `tail ${tail.toString('hex')}`)
 	}
-	assert.throws(() => extract('é', Buffer.from([0x7b, 0, 0, 0, 0, 0, 0, 0, 1, 0x61])), unexpectedEnd, '8 byte length')
-	assert.throws(() => extract('é', Buffer.from([0x5b, 0, 0, 0, 0, 0, 0, 0, 1, 0x61])), unexpectedEnd, '8 byte binary length')
+	assert.throws(() => extract('é', Buffer.from([0x7b, 0, 0, 0, 0, 0, 0, 0])), unexpectedEnd, 'truncated 8 byte length')
+	assert.throws(() => extract('é', Buffer.from([0x7b, 0, 0, 0, 1, 0, 0, 0, 0, 0x61])), unexpectedEnd, '8 byte length past the end')
 	assert.throws(() => extractStrings(0, doc.source.length + 1, 0, doc.source), unexpectedEnd, 'size past the buffer')
 	assert.throws(() => extractStrings(doc.source.length + 1, doc.source.length, 0, doc.source), unexpectedEnd, 'position past the buffer')
+	assert.throws(() => extractStrings(3, 2, 0, doc.source), unexpectedEnd, 'position past the size')
+})
+
+// cbor-x reads these headers too, so a document using them must not fail only because the extractor is loaded
+test('8 byte lengths are read like any other', () => {
+	const eight = (major, length) => Buffer.from([(major << 5) | 27, 0, 0, 0, 0, 0, 0, 0, length])
+	assert.deepEqual(extract('é', eight(3, 3), Buffer.from('abc')), ['é', 'abc'])
+	assert.deepEqual(extract('é', eight(2, 3), Buffer.from([1, 2, 3]), 'abc'), ['é', 'abc'])
+	assert.deepEqual(extract('é', Buffer.from([0x5b, 0xff, 0, 0, 0, 0, 0, 0, 0, 0x61])), 'é', 'a byte string past the end ends the scan')
+})
+
+test('an indefinite length string ends the scan, leaving it to cbor-x', () => {
+	assert.equal(extract('é', Buffer.from([0x7f, 0x63, 0x61, 0x62, 0x63, 0xff])), 'é')
+	assert.equal(extract('é', Buffer.from([0x5f, 0x41, 0x00, 0xff]), 'abc'), 'é')
+	// indefinite arrays and maps have no argument bytes and are scanned through
+	assert.deepEqual(extract('é', Buffer.from([0x9f, 0xbf]), 'abc', Buffer.from([0xff, 0xff])), ['é', 'abc'])
+})
+
+test('an empty string at position 0 is still returned', () => {
+	assert.equal(extractStrings(0, 0, 0, Buffer.alloc(0)), '')
+	assert.deepEqual(extractStrings(0, 3, 0, Buffer.from([0x62, 0xc3, 0xa9])), ['', 'é'])
+	// the run starts at the empty string, so the next string's header is in it and cbor-x slices 'abc' from offset 1
+	assert.equal(extractStrings(0, 4, 0, Buffer.from([0x63, 0x61, 0x62, 0x63])), 'cabc')
+})
+
+test('a run closed by a gap at the string limit still returns the run left open: 255 elements', () => {
+	const doc = document(...Array(253).fill('é'), 'ab', binary(45), 'cd', 'é')
+	const result = extractStrings(...doc.args)
+	assert.equal(result.length, MAX_STRINGS + 1)
+	assert.deepEqual(result.slice(-2), ['ab', 'cd'])
+	check(result, doc)
+})
+
+test('arguments that are not non-negative integers throw a TypeError', () => {
+	const source = text('abc')
+	const invalid = { name: 'TypeError', message: 'Expected the position, size and string length to be non-negative integers' }
+	for (const args of [[], ['1', 4, 3], [1, 4, undefined], [1n, 4, 3], [-1, 4, 3], [1.5, 4, 3], [1, NaN, 3], [1, Infinity, 3], [1, 4, 2 ** 53]]) {
+		assert.throws(() => extractStrings(args[0], args[1], args[2], source), invalid, String(args))
+	}
+	// beyond 2^32 is rejected as past the buffer instead of wrapping to a small position
+	assert.throws(() => extractStrings(2 ** 32 + 1, 2 ** 32 + 4, 3, source), { message: 'Unexpected end of buffer reading string' })
+})
+
+test('Array.of is captured when the module loads', () => {
+	const arrayOf = Array.of
+	Array.of = () => ['replaced']
+	try {
+		assert.deepEqual(extract('é', 'abc'), ['é', 'abc'])
+	} finally {
+		Array.of = arrayOf
+	}
+})
+
+test('loads and works in worker threads', async () => {
+	const { Worker } = require('node:worker_threads')
+	const code = `
+		const { parentPort } = require('node:worker_threads')
+		const { extractStrings } = require(${JSON.stringify(require.resolve('../index.js'))})
+		const source = Buffer.from([0x62, 0xc3, 0xa9, 0x63, 0x61, 0x62, 0x63])
+		parentPort.postMessage(extractStrings(1, source.length, 2, source))`
+	const results = await Promise.all(Array.from({ length: 4 }, () => new Promise((resolve, reject) => {
+		const worker = new Worker(code, { eval: true })
+		worker.once('message', (message) => worker.terminate().then(() => resolve(message)))
+		worker.once('error', reject)
+	})))
+	for (const result of results) assert.deepEqual(result, ['é', 'abc'])
 })
 
 test('a source that is not a Buffer throws a TypeError', () => {

@@ -1,60 +1,35 @@
 {
-  "variables": {
-      "os_linux_compiler%": "gcc",
-      "enable_v8%": "true",
-      "enable_pointer_compression%": "false",
-      "build_v8_with_gn": "false"
-  },
-  "conditions": [
-    ['OS=="win"', {
-      "variables": {
-        "enable_v8%": "<!(echo %ENABLE_V8_FUNCTIONS%)",
-      }
-    }],
-    ['OS!="win"', {
-      "variables": {
-        "enable_v8%": "<!(echo $ENABLE_V8_FUNCTIONS)",
-      }
-    }]
-  ],
   "targets": [
     {
       "target_name": "extract",
-      "sources": [
-        "src/extract.cpp",
-      ],
-      "defines": [ "NAPI_DISABLE_CPP_EXCEPTIONS" ],
+      # scanner_checks.cpp only holds static_asserts: the build fails if the scanner breaks, and the binary is unchanged
+      "sources": ["src/extract.cpp", "src/scanner_checks.cpp"],
+      # pins the Node-API version instead of following the headers' default; the code needs nothing newer
+      "defines": ["NAPI_VERSION=8"],
+      # node-gyp's Release already builds with -O3 (/Ox on Windows), without exceptions or RTTI, as C++20: the standard
+      # flags below come after node-gyp's, so they win
       "conditions": [
         ["OS=='linux'", {
-          "variables": {
-            "gcc_version" : "<!(<(os_linux_compiler) -dumpversion | cut -d '.' -f 1)",
-          },
-          "cflags_cc": [
-            "-fPIC",
-            "-fvisibility=hidden",
-            "-fvisibility-inlines-hidden",
-          ],
-          "conditions": [
-            ["gcc_version>=7", {
-              "cflags": [
-                "-Wimplicit-fallthrough=2",
-              ],
-            }],
-          ],
-          "ldflags": [
-            "-fPIC",
-            "-fvisibility=hidden"
-          ],
-          "cflags": [
-            "-fPIC",
-            "-fvisibility=hidden",
-            "-O3"
-          ],
+          "cflags": ["-fvisibility=hidden"],
+          "cflags_cc": ["-std=gnu++23"],
+          "ldflags": ["-Wl,--as-needed", "-Wl,-z,relro,-z,now"]
         }],
-        ["enable_v8!='false'", {
-          "defines": ["ENABLE_V8_API=1"]
+        ["OS=='mac'", {
+          "xcode_settings": {
+            "OTHER_CPLUSPLUSFLAGS": ["-std=gnu++23"],
+            "GCC_SYMBOLS_PRIVATE_EXTERN": "YES",
+            "DEAD_CODE_STRIPPING": "YES"
+          }
         }],
-      ],
+        ["OS=='win'", {
+          "msvs_settings": {
+            # VS 2022 has std::expected only under /std:c++latest
+            "VCCLCompilerTool": { "AdditionalOptions": ["/std:c++latest"] },
+            # common.gypi links with /DEBUG, which turns these off unless Node itself was built with LTCG
+            "VCLinkerTool": { "OptimizeReferences": 2, "EnableCOMDATFolding": 2 }
+          }
+        }]
+      ]
     }
   ]
 }

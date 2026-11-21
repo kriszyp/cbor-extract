@@ -134,7 +134,19 @@ public:
 						length += source[position++];
 						break;
 					case 0x1b:
-						return unexpectedEnd(env);
+						if (size - position < 8) {
+							return unexpectedEnd(env);
+						}
+						if (source[position] | source[position + 1] | source[position + 2] | source[position + 3]) {
+							length = 0xffffffff; // over 32 bits: longer than any buffer we scan
+						} else {
+							length = (uint32_t) source[position + 4] << 24;
+							length += source[position + 5] << 16;
+							length += source[position + 6] << 8;
+							length += source[position + 7];
+						}
+						position += 8;
+						break;
 					default:
 						length = token;
 				}
